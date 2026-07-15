@@ -1,0 +1,20 @@
+Set up a fresh Playwright + TypeScript QA project for testing a real estate 
+web app at https://qa-darshan.vercel.app (login at /login).
+
+Requirements:
+- playwright.config.ts with: baseURL set to the app, trace 'on-first-retry', 
+  screenshot 'only-on-failure', video 'retain-on-failure', HTML reporter, 
+  retries: 1, fullyParallel: true, chromium project only (keep it lean for a time-boxed task).
+- A folder structure: /tests, /tests/auth, /tests/authorization, /ai, 
+  and a /fixtures folder for storageState auth files.
+- A README.md skeleton with sections: Risk Charter, Exploratory Notes, 
+  Bug Reports, Automation, AI Artifact, Go/No-Go. Leave them as headers 
+  for me to fill.
+- An auth setup file that logs in as each of the three accounts and saves 
+  storageState to /fixtures (agent-everreal.json, admin-everreal.json, 
+  agent-alpen.json) so tests can reuse sessions without re-logging in.
+- A .gitignore that excludes node_modules and the fixtures/*.json auth files 
+  (they contain session tokens — do not commit them).
+
+Explain the storageState pattern in comments so a reviewer can see the intent.
+Do not write any actual feature tests yet — just the scaffold.

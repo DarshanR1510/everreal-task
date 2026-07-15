@@ -1,0 +1,56 @@
+Build a Python eval harness that scores AI-generated Playwright tests against 
+a rubric, using an LLM-as-judge, and then VALIDATES the judge against a 
+hand-labeled golden set. This is for a QA take-home; the point is to prove 
+judgment on top of AI, not just to use AI.
+
+Structure it as a small, dependency-light Python project (only `anthropic` 
+and stdlib — no DeepEval/pytest needed). Files:
+
+/ai/eval/
+  rubric.py        # the scoring criteria, as data — SEE NOTE 1, leave a clear
+                   # place for me to define criteria; include 2 examples only 
+                   # as placeholders I will replace
+  golden_set.py    # list of labeled test snippets — SEE NOTE 2, leave the 
+                   # labels/reasons as TODO placeholders I will fill in myself
+  judge.py         # calls the Anthropic API, sends a candidate test + rubric, 
+                   # returns structured JSON: per-criterion pass/fail + reason 
+                   # + overall verdict GOOD/BAD
+  meta_eval.py     # runs the judge over the golden set, compares the judge's 
+                   # verdict to MY label, prints an agreement report 
+                   # (accuracy, and every disagreement spelled out)
+  run.py           # entrypoint: `python -m ai.eval.run` runs meta_eval and 
+                   # prints the report
+
+Requirements:
+- judge.py: use the messages endpoint, model claude-sonnet-4-6, max_tokens 
+  1024. The system prompt must instruct the model to score ONLY against the 
+  provided rubric and return ONLY valid JSON (no prose, no markdown fences). 
+  Parse defensively: strip any ```json fences, try/except on JSON.parse, and 
+  if parsing fails, mark that candidate as an ERROR (not a silent pass).
+- The JSON schema returned per candidate: 
+  { "criteria": [ {"name": str, "passed": bool, "reason": str} ], 
+    "verdict": "GOOD" | "BAD", "overall_reason": str }
+- meta_eval.py: for each golden-set item, call the judge, compare judge.verdict 
+  to the item's human_label, and produce: total, agreements, disagreements, 
+  agreement_rate, and a printed list of each disagreement showing the snippet 
+  name, my label, the judge's verdict, and the judge's reason. 
+  IMPORTANT: a judge that disagrees with my labels means the JUDGE is suspect — 
+  the report should frame disagreements as "judge needs tuning", not "my label 
+  is wrong". Add a comment saying so.
+- No API key in code — read from env (ANTHROPIC_API_KEY), fail with a clear 
+  message if missing.
+- Add a README in /ai/eval explaining: what the harness does, why the 
+  meta-eval matters (validating the evaluator), and how to run it.
+
+NOTE 1 (rubric): leave the criteria list mostly empty with a clear TODO and 
+2 placeholder examples. Do NOT invent the full rubric — I am defining the 
+criteria myself; you only build the structure that consumes them.
+
+NOTE 2 (golden set): create the data structure and 2 placeholder entries with 
+human_label set to "TODO", but do NOT write the labels or pick which snippets 
+are good/bad — I will paste in my own real test snippets and label them 
+myself. Just build the container and the field shape 
+(name, code, human_label, reason).
+
+Do not run the harness or fabricate results. Build the scaffold and the logic; 
+I will fill rubric + golden set and run it.

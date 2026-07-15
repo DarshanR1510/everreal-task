@@ -1,0 +1,34 @@
+I'm building Playwright + TypeScript tests for a real estate SaaS. I've
+manually confirmed these defects and want automated regression tests that
+FAIL against the current buggy build (proving the bug exists) and would
+PASS once fixed. Assert the CORRECT behavior in every test, so each one
+currently fails and documents the bug — never assert the buggy behavior as
+expected.
+
+Tests:
+
+Cross-tenant isolation: logged in as agent@alpen-immobilien.de (agencyId
+"alpen-immobilien"), a request to /contacts/1 (a München/EverReal contact)
+currently returns 200 with another agency's data. Assert that an Alpen
+agent must NOT be able to load a non-Alpen contact (expect 403/404 or empty).
+
+Session forgery / privilege escalation: the session cookie is unsigned
+base64 JSON with fields email, role, agencyId, iat. I've confirmed that
+decoding it, changing role to "admin" or agencyId to "everreal",
+re-encoding, and setting it back makes the app act as that forged identity
+AND persists data changes under it. Write a test that: reads the cookie,
+decodes it, tampers agencyId (and separately role), re-encodes, sets it,
+reloads, and asserts the app REJECTS the forged session (correct behavior).
+The test should currently fail because the app accepts it.
+
+CSV export sanitization: a contact field beginning with = @ + - should be
+neutralized (prefixed with ' or escaped) in Export CSV output. Assert the
+exported cell is not a live formula. I've confirmed the current export
+preserves the live formula.
+
+For each test add a comment block: what it proves, who is harmed if it
+regresses, severity reasoning (victim + blast radius + reversibility), and
+why I assert fixed behavior rather than current behavior.
+
+Use the storageState fixtures from /fixtures. Prefer getByRole/getByTestId.
+Keep it lean — these three are the point, don't pad with trivial UI tests.
