@@ -1,0 +1,15 @@
+{
+  "cookies": [
+    {
+      "name": "session",
+      "value": "eyJlbWFpbCI6ImFnZW50QGV2ZXJyZWFsLmNvIiwicm9sZSI6ImFnZW50IiwiYWdlbmN5SWQiOiJldmVycmVhbC1kZW1vIiwiaWF0IjoxNzg0MTA1MjAwNDg2fQ%3D%3D",
+      "domain": "qa-darshan.vercel.app",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}

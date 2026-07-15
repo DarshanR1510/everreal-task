@@ -1,0 +1,40 @@
+1. Logged in with admin credentials (01:05 pm IST) - All times are in IST
+- Explored the contact details, clicked on them, observed the details page
+- Found a medium issue of 1st note in the list is not getting visible
+- Back on the contacts page, observed that a contact has name as "CSV Injection that navigates to site" and email that makes some calculations
+- Confirmed it with downloading the csv, and verified the issue.
+- Logged out
+
+2. Logged in with agent credentials (01:12 pm IST)
+- Observed that similar view, contacts, and access as an admin
+- Instantly realised that it's a Critical bug
+- quickly logged out and logged in as Agent-alpen
+- Observed same results - Meaning the issue is across the accounts, and the data that were meant for only everreal, can be access by alpen as well.
+
+3. Explored Back-end (01:30 pm)
+- Open DevTools, checked all the api-endpoints in network tab to see what's happening underneath.
+- I show for all the accounts, the api response is same and no authorization issues as well
+- Then copied the cURL, and asked AI, to find the root-cause of it. It informed me the even more critical issue about forging the cookies
+- Opened Cookies, and observed the session id is also in bash64, which anyone can decode and modify
+- To validate that, decoded that agent-alpen session, forge the data with other email id, encoded it and updated the session id
+- I was actually abled to modify the user just by injecting the cookies
+
+4. Note down all bugs: (01:45 pm)
+1. Cross-tenant data exposure — API returns all agencies' contacts incl. confidential VIPs
+2. Forgeable session — unsigned base64 cookie, client controls role + agencyId
+3. CSV injection — malicious formula in contact, Export CSV preserves it
+4. Views button ignores saved filter, shows all contacts
+5. First note not visible after adding
+
+4. Started working on Playwright with TypeScript automation with Claude Code (01:55 pm)
+- Created prompt for the scaffolding the framework
+- Claude code scaffolded it with actual locators
+- Verified the files and framework
+- Entered credentials
+- Gave another prompt for writing the test cases and make sure that they should fail as per the current scenarios, but when got fixed, they must pass.
+- It first planned it out in details
+- Reviewed the plan, ask it to get approval before finalizing
+
+5. Fixing the issues in AI generated tests (02: 20 pm)
+- In the cross-tenant-isolation test file, The ?? 'alpen-immobilien' fallback was mentioned, which means if the response has no agencyId field at all, the test passes, it substitutes the "correct" value and asserts it against itself. That's a false-green risk: a malformed or empty response would satisfy this test even though nothing was verified. 
+- asked it fail when the field is absent
