@@ -11,3 +11,16 @@ node_modules/
 
 # OS
 .DS_Store
+
+node_modules/
+test-results/
+playwright-report/
+
+node_modules/
+test-results/
+playwright-report/
+__pycache__/
+*.pyc
+fixtures/*.json
+Evereal task demo.mp4
+*.mp4

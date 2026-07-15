@@ -14,7 +14,9 @@
 3. Explored Back-end (01:30 pm)
 - Open DevTools, checked all the api-endpoints in network tab to see what's happening underneath.
 - I show for all the accounts, the api response is same and no authorization issues as well
-- Then copied the cURL, and asked AI, to find the root-cause of it. It informed me the even more critical issue about forging the cookies
+- I copied the cURL and noticed the session cookie was plain base64, not a signed token. I decoded it, saw it held email/role/agencyId in plain JSON, and realised it was forgeable. 
+- I used AI to sanity-check my reading of the cURL, but the decode, the forge, and the exploit were mine.
+
 - Opened Cookies, and observed the session id is also in bash64, which anyone can decode and modify
 - To validate that, decoded that agent-alpen session, forge the data with other email id, encoded it and updated the session id
 - I was actually abled to modify the user just by injecting the cookies
@@ -26,7 +28,19 @@
 4. Views button ignores saved filter, shows all contacts
 5. First note not visible after adding
 
-4. Started working on Playwright with TypeScript automation with Claude Code (01:55 pm)
+5. Dead ends / things I checked that were NOT bugs (02:05 pm) 
+- Checked whether logout actually clears the session (didn't just trust the UI) 
+- session was cleared correctly on logout. Not a bug, moved on.
+- Compared admin vs agent navigation to see if admin exposed extra pages/actions the agent shouldn't reach - found no separate admin-only surface in the UI. 
+- The real gap wasn't hidden pages, it was that the backend doesn't enforce roles at all (see forging).
+- Poked the search box with odd input (special chars, long strings) looking for input-handling bugs - nothing exploitable surfaced. Low value under time box, dropped it.
+
+
+6. Deliberately NOT tested, and why (02:10 pm)
+- Skipped visual/CSS/layout bugs, exhaustive input-validation, and any performance/load angle. 
+- With two total-blast-radius auth failures on the table, spending my time box there would be padding. Depth over breadth - I put the hours into proving the auth bugs and automating them instead.
+
+7. Started working on Playwright with TypeScript automation with Claude Code (01:55 pm)
 - Created prompt for the scaffolding the framework
 - Claude code scaffolded it with actual locators
 - Verified the files and framework
@@ -35,6 +49,23 @@
 - It first planned it out in details
 - Reviewed the plan, ask it to get approval before finalizing
 
-5. Fixing the issues in AI generated tests (02: 20 pm)
-- In the cross-tenant-isolation test file, The ?? 'alpen-immobilien' fallback was mentioned, which means if the response has no agencyId field at all, the test passes, it substitutes the "correct" value and asserts it against itself. That's a false-green risk: a malformed or empty response would satisfy this test even though nothing was verified. 
+
+8. Reviewed the AI-generated tests and caught a false-green (02: 30 pm)
+- In the cross-tenant-isolation test file, The ?? 'alpen-immobilien' fallback was mentioned, which means if the response has no agencyId field at all, the test passes, it substitutes the "correct" value and asserts it against itself. 
+- That's a false-green risk: a malformed or empty response would satisfy this test even though nothing was verified. 
 - asked it fail when the field is absent
+
+10. Built a Python eval harness (03:00 pm)
+- an LLM-judge that scores AI-generated tests against a rubric I defined, validated against a golden set I hand-labeled. 
+- The point is to not trust AI scoring blindly.
+- First meta-eval run came back 50%. 
+- Traced the disagreements: the judge was calling my GOOD examples BAD, and it was right - my rubric demanded severity documentation my short example snippets didn't have. 
+- The bug was in my golden set, not the judge. Fixed the examples, rerun hit 100%. The eval caught my own mistake before I trusted a single score.
+
+11. Documented in /ai: my prompts, the raw AI output, my corrections with reasons and 3 things I would NOT trust AI to do here (authz assertions, severity  calls, exact-value oracles). (3:30 pm)
+
+12. Go / No-Go (4:00 pm)
+Recommendation: NO-GO. Two independent critical auth failures - cross-tenant data exposure and a forgeable session (privilege escalation) 
+- either one blocks release on its own. 
+- Fixing the API filter alone doesn't help; a forged agencyId reopens the same door. 
+- Ship only once both are fixed and the regression tests in this repo (currently failing by design) turn green.
