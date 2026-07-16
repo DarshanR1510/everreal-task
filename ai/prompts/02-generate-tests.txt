@@ -32,3 +32,1037 @@ why I assert fixed behavior rather than current behavior.
 
 Use the storageState fixtures from /fixtures. Prefer getByRole/getByTestId.
 Keep it lean — these three are the point, don't pad with trivial UI tests.
+
+
+
+OUTPUT:
+
+Claude: Completed Task: "Find Playwright test setup and fixtures"
+
+Completed Task: "Find session cookie and contacts auth logic"
+
+Completed Task: "Find CSV export implementation for contacts"
+
+I've dispatched three Explore agents in parallel to research: (1) the Playwright test setup and `/fixtures` storageState files, (2) the session cookie/auth and cross-tenant contact logic, and (3) the CSV export implementation. I'll wait for them to finish before drafting the plan.
+
+Used tool: ToolSearch
+
+I'll wait for the three research agents to complete before proceeding — no action needed right now.
+
+User: <task-notification>
+<task-id>af409d4302ec6429b</task-id>
+<tool-use-id>toolu_014xC4Lk1vXqKgEkwrJAsCBH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-darshan-WORK-CODE-Everreal-task/3255c704-1f6b-43f3-b190-e640417be666/tasks/af409d4302ec6429b.output</output-file>
+<status>completed</status>
+<summary>Agent "Find Playwright test setup and fixtures" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now I have a complete picture. Here is the report.
+
+## 1. Playwright test location &amp; config
+
+- Config: `/Users/darshan/WORK/CODE/Everreal-task/playwright.config.ts`
+- Tests root: `testDir: './tests'`, matched via `testMatch: /.*\.(spec|setup)\.ts/` (so both `*.spec.ts` and `*.setup.ts` are picked up — no separate `setup` project/`dependencies` wired yet, just a regex).
+- Current tree:
+  - `tests/auth/auth.setup.ts` — the only real test file in the repo so far (generates storageState fixtures).
+  - `tests/authorization/.gitkeep` — empty placeholder directory, presumably where you're meant to add the new authorization/security regression specs.
+- Full config content (`playwright.config.ts:1-30`):
+```ts
+import { defineConfig, devices } from '@playwright/test';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const BASE_URL = process.env.BASE_URL ?? 'https://qa-darshan.vercel.app';
+
+export default defineConfig({
+  testDir: './tests',
+  // Include auth.setup.ts (login/storageState capture) alongside regular *.spec.ts files.
+  testMatch: /.*\.(spec|setup)\.ts/,
+  fullyParallel: true,
+  retries: 1,
+  reporter: [['html', { open: 'never' }]],
+
+  use: {
+    baseURL: BASE_URL,
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
+
+  // Chromium only — this is a time-boxed QA task, cross-browser coverage isn't the goal.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+});
+```
+- `BASE_URL` is exported from the config too, in case a spec needs it directly (e.g. for cross-origin cookie checks) rather than relying on `page.goto('/relative')`.
+- Note: `BASE_URL` defaults to `https://qa-darshan.vercel.app` and is also present in `.env`/`.env.example` — real target is the deployed QA app, not localhost.
+
+## 2. `/fixtures` directory and storageState
+
+Path: `/Users/darshan/WORK/CODE/Everreal-task/fixtures/`
+
+Files present:
+- `fixtures/.gitkeep`
+- `fixtures/admin-everreal.json`
+- `fixtures/agent-everreal.json`
+- **Not present yet**: `fixtures/agent-alpen.json` — referenced by `auth.setup.ts` (see below) as the second-tenant account, but the file hasn't been generated (its env creds `ALPEN_AGENT_EMAIL`/`ALPEN_AGENT_PASSWORD` are empty in `.env`). This looks like exactly the kind of fixture you'd need for cross-tenant/IDOR-style authorization tests — you may need to fill in those creds and run `npm run test:auth` before it exists.
+
+`fixtures/admin-everreal.json` (full content):
+```json
+{
+  "cookies": [
+    {
+      "name": "session",
+      "value": "eyJlbWFpbCI6ImFkbWluQGV2ZXJyZWFsLmNvIiwicm9sZSI6ImFkbWluIiwiYWdlbmN5SWQiOiJldmVycmVhbC1kZW1vIiwiaWF0IjoxNzg0MTA1MjAwNDQyfQ%3D%3D",
+      "domain": "qa-darshan.vercel.app",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}
+```
+`fixtures/agent-everreal.json` (full content, same shape, different session cookie for `agent@everreal.co`, role `agent`, same `agencyId: "everreal-demo"`).
+
+Note: the `session` cookie value is base64/URL-encoded JSON (`{"email":...,"role":...,"agencyId":...,"iat":...}`) — decoding it is trivial, which itself may be relevant to what you're regression-testing (e.g. cookie tampering / privilege escalation by editing `role` or `agencyId` and re-encoding). Also worth flagging: `"secure": false` on a cookie for an `https://` origin, and `httpOnly: true` — good for XSS protection but means you can't read/write it via `document.cookie`, only via `context.addCookies()`/`context.cookies()`.
+
+How storageState is generated / referenced:
+- There is **no custom `fixtures.ts`/`test-base.ts` file** — no extended `test` object anywhere in the repo. `test`/`expect` are imported straight from `@playwright/test` everywhere.
+- Fixtures are produced by `tests/auth/auth.setup.ts` (full file, `tests/auth/auth.setup.ts:1-78`):
+```ts
+import { test as setup, expect } from '@playwright/test';
+import path from 'path';
+
+/**
+ * storageState pattern
+ * --------------------
+ * Playwright can snapshot a browser context's cookies + localStorage into a
+ * JSON file via `context.storageState({ path })`. Any later test that starts
+ * with `test.use({ storageState: 'fixtures/&lt;file&gt;.json' })` (or a project-level
+ * `use.storageState`) launches already logged in — no UI login step, no
+ * repeated auth calls, and each account's session is isolated to its own file.
+ *
+ * This file performs the one real UI login per account and writes the result
+ * to /fixtures. It is not a feature test — run it on its own (or wire it in
+ * later as a Playwright "setup" project with `dependencies: ['setup']`) before
+ * relying on the generated storageState files.
+ *
+ *   npx playwright test tests/auth/auth.setup.ts
+ *
+ * Regenerate the fixtures whenever a session expires or credentials change.
+ */
+
+const FIXTURES_DIR = path.join(__dirname, '..', '..', 'fixtures');
+
+interface Account {
+  name: string;
+  storageStateFile: string;
+  emailEnvVar: string;
+  passwordEnvVar: string;
+}
+
+const ACCOUNTS: Account[] = [
+  {
+    name: 'agent-everreal',
+    storageStateFile: 'agent-everreal.json',
+    emailEnvVar: 'EVERREAL_AGENT_EMAIL',
+    passwordEnvVar: 'EVERREAL_AGENT_PASSWORD',
+  },
+  {
+    name: 'admin-everreal',
+    storageStateFile: 'admin-everreal.json',
+    emailEnvVar: 'EVERREAL_ADMIN_EMAIL',
+    passwordEnvVar: 'EVERREAL_ADMIN_PASSWORD',
+  },
+  {
+    name: 'agent-alpen',
+    storageStateFile: 'agent-alpen.json',
+    emailEnvVar: 'ALPEN_AGENT_EMAIL',
+    passwordEnvVar: 'ALPEN_AGENT_PASSWORD',
+  },
+];
+
+for (const account of ACCOUNTS) {
+  setup(`authenticate as ${account.name}`, async ({ page }) =&gt; {
+    const email = process.env[account.emailEnvVar];
+    const password = process.env[account.passwordEnvVar];
+
+    if (!email || !password) {
+      throw new Error(
+        `Missing credentials for ${account.name}. Set ${account.emailEnvVar} and ` +
+          `${account.passwordEnvVar} in .env (see .env.example).`,
+      );
+    }
+
+    await page.goto('/login');
+    await page.getByTestId('#email').fill(email);
+    await page.getByTestId('#password').fill(password);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+
+    // Wait for the post-login redirect so the storageState captures an
+    // authenticated session rather than the login page itself.
+    await expect(page).not.toHaveURL(/\/login$/);
+
+    await page.context().storageState({
+      path: path.join(FIXTURES_DIR, account.storageStateFile),
+    });
+  });
+}
+```
+- Run via `npm run test:auth` (package.json script `"test:auth": "playwright test tests/auth/auth.setup.ts"`), regenerating the JSONs above.
+- **No test file currently consumes these fixtures** (no `test.use({ storageState: ... })` calls exist anywhere yet, and no `authorization/*.spec.ts` exists — the whole `tests/authorization/` folder is just a `.gitkeep`). You'll be the first to write specs that do `test.use({ storageState: 'fixtures/agent-everreal.json' })` etc.
+
+## 3. Example test file(s) / conventions
+
+There is only **one** real test file in the repo: `tests/auth/auth.setup.ts` (shown in full above). No `*.spec.ts` files exist yet anywhere in the repo (confirmed via repo-wide search). Conventions you can infer from it, to follow in your new specs:
+- Import style: `import { test as setup, expect } from '@playwright/test';` (for regular specs you'd use `import { test, expect } from '@playwright/test';`), plus Node builtins like `import path from 'path';` when needed.
+- Locators: uses `page.getByTestId('#email')` / `page.getByTestId('#password')` (note: the testId strings literally include a `#` prefix — check the app's `data-testid` attributes to confirm exact naming) and `page.getByRole('button', { name: 'Sign in' })`.
+- Assertions: `expect(page).not.toHaveURL(/\/login$/)` — standard web-first assertion style with regex matching.
+- No `test.describe` blocks used yet (file uses a `for` loop generating dynamically-named `setup(...)` calls instead) — you're free to establish the `test.describe` convention for the new authorization specs since nothing pre-exists to contradict it.
+- No custom fixtures/helpers module exists — everything is vanilla `@playwright/test` imports; there is no base test wrapper to extend.
+
+## 4. Cookie read/write helpers
+
+- No existing helper or usage of `context.cookies()` or `context.addCookies()` anywhere in the repo (repo-wide grep for `cookies(` / `addCookies` returned nothing outside comments in `auth.setup.ts` referencing `context.storageState()`).
+- The only cookie-related mechanism currently is the storageState JSON files in `/fixtures` (which embed a `cookies` array, shown in section 2) loaded wholesale via `test.use({ storageState: &lt;path&gt; })`. If your security regression tests need to mutate a cookie (e.g. tamper with the `role`/`agencyId` fields in the base64-encoded `session` cookie value, or test session-fixation/cookie-injection), you'll need to write this helper yourself — nothing to reuse currently. A natural approach: read a fixture JSON's `cookies` array, decode/modify the `session` value, then call `context.addCookies([...])` before navigating, or construct one from scratch and pass to `browser.newContext({ storageState: { cookies: [...], origins: [] } })`.
+
+## 5. package.json scripts &amp; TypeScript config
+
+`package.json` (`/Users/darshan/WORK/CODE/Everreal-task/package.json:6-10`):
+```json
+"scripts": {
+  "test": "playwright test",
+  "test:auth": "playwright test tests/auth/auth.setup.ts",
+  "report": "playwright show-report"
+},
+```
+- `npm test` runs the whole `tests/` directory matched by the config's `testMatch` regex (which includes `.setup.ts` — so a plain `npm test` will also re-run the auth setup file and regenerate fixtures unless you scope it, e.g. `npx playwright test tests/authorization`).
+- devDependencies: `@playwright/test ^1.61.1`, `typescript ^7.0.2`, `@types/node ^26.1.1`, `dotenv ^17.4.2`.
+
+`tsconfig.json` (`/Users/darshan/WORK/CODE/Everreal-task/tsconfig.json:1-13`):
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node", "@playwright/test"]
+  },
+  "exclude": ["node_modules", "playwright-report", "test-results"]
+}
+```
+- No `paths`/`baseUrl` alias mapping is configured — imports must be relative (e.g. `import { BASE_URL } from '../../playwright.config'` if you need it) or straight package imports (`@playwright/test`). `resolveJsonModule: true` means you could `import adminState from '../../fixtures/admin-everreal.json'` directly with type-checking if you prefer that over passing a string path to `storageState`.
+- `module: commonjs` + no `"type": "module"` in package.json — this is a CommonJS TS project, not ESM, so stick with standard `require`-compatible `import` syntax (already what `auth.setup.ts` uses) rather than dynamic `import()`/`.mjs` patterns.
+
+## Summary / things to note before writing new specs
+- `tests/authorization/` is empty (just `.gitkeep`) — this is clearly the intended home for your new security/authorization regression tests.
+- You'll likely want `agent-alpen.json` (cross-tenant fixture) for IDOR/cross-agency tests, but it doesn't exist yet — you need `ALPEN_AGENT_EMAIL`/`ALPEN_AGENT_PASSWORD` filled into `.env` and to run `npm run test:auth` first.
+- No existing `fixtures.ts`/custom test base — you're free (and will likely want) to create one for a shared "with role X storageState" pattern, but nothing currently exists to conflict with or extend.
+- The `session` cookie is a base64url-encoded plaintext JSON blob (email/role/agencyId/iat) with no visible signature/HMAC in the value itself — worth confirming server-side whether it's actually verified, since this is prime territory for a cookie-tampering privilege-escalation regression test.</result>
+<usage><subagent_tokens>28050</subagent_tokens><tool_uses>5</tool_uses><duration_ms>79645</duration_ms></usage>
+</task-notification>
+
+Claude: Good progress — the test setup agent confirmed the `session` cookie is plain base64url JSON with no HMAC, and flagged that the `agent-alpen.json` fixture doesn't exist yet (needs credentials + a setup run). Waiting on the other two research agents (auth/cookie internals and CSV export) before drafting the plan.
+
+User: <task-notification>
+<task-id>ad4351a43f6f269c0</task-id>
+<tool-use-id>toolu_018veZ1kHW1NXvZqCbqqViUS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-darshan-WORK-CODE-Everreal-task/3255c704-1f6b-43f3-b190-e640417be666/tasks/ad4351a43f6f269c0.output</output-file>
+<status>completed</status>
+<summary>Agent "Find CSV export implementation for contacts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary of Investigation
+
+Before getting into the 5 points, an important scoping finding:
+
+**This local repo (`/Users/darshan/WORK/CODE/Everreal-task`) contains no application source code at all.** It is purely a Playwright/TypeScript QA test scaffold:
+
+```
+/Users/darshan/WORK/CODE/Everreal-task/
+  playwright.config.ts   -&gt; baseURL defaults to https://qa-darshan.vercel.app
+  package.json
+  tests/auth/auth.setup.ts
+  tests/authorization/.gitkeep   (empty)
+  fixtures/admin-everreal.json, agent-everreal.json  (storageState snapshots)
+  .env.example
+  README.md
+```
+
+`README.md:1-4` confirms this: *"Playwright + TypeScript QA project for the EverReal Property Portal Lite (`https://qa-darshan.vercel.app`)."* The "contacts" feature, its CSV export, and any sanitization bug live entirely in that **deployed external app**, not in this git repository. There is no Next.js/React/API source tree checked in here to grep for the CSV-serialization function.
+
+I attempted to investigate the live app itself (fetching `https://qa-darshan.vercel.app/login`, downloading its Next.js JS chunks, and grepping them for `csv`/`export`/`contact` strings) — the initially-served chunks are just the login page + framework runtime and contain no CSV/contacts code (that's presumably in route chunks only loaded post-authentication). When I then tried to authenticate (reusing the session cookie already present in `fixtures/admin-everreal.json`, which was generated earlier by this same project's `auth.setup.ts`) so I could load the actual `/contacts` page and its CSV export chunk, **the permission system blocked further requests**, flagging it as unauthorized credential/reconnaissance activity against an external site. I did not attempt to work around that block.
+
+Given that, here's what I can report per your 5 points, and what remains unknown:
+
+### 1. UI trigger for CSV export on contacts page
+**Unknown from this repo** — no contacts page markup exists locally. Not yet observed on the live app because authenticated navigation was blocked before reaching `/contacts`.
+
+### 2. CSV generation code / cell-serialization logic
+**Unknown / not present locally.** There is no server route or client bundle in this repo that builds CSV. This logic lives in the deployed app's own codebase, which is not part of this git repo. I cannot show a file:line for a function that doesn't exist in `Everreal-task`.
+
+### 3. Delivery mechanism (download vs inline fetch)
+**Unknown** — same blocker; would need an authenticated browser/network trace against `qa-darshan.vercel.app/contacts` to observe whether "Export CSV" triggers a `download` event, an inline `fetch`/XHR returning `text/csv`, or client-side Blob + `&lt;a download&gt;`.
+
+### 4. Contact fields available for injection testing
+Nothing in this repo's fixtures represents contact records — `fixtures/admin-everreal.json` and `agent-everreal.json` are just Playwright `storageState` files (cookies for auth), not contact/lead seed data. There's no seed/mock data file for contacts in this repo to point to.
+
+### 5. Contact list page URL / data-testid conventions
+Confirmed conventions from what exists locally:
+- Base URL: `https://qa-darshan.vercel.app` (`playwright.config.ts:6`)
+- Login route: `/login` (`tests/auth/auth.setup.ts:65`)
+- data-testid pattern observed so far: `page.getByTestId('#email')`, `page.getByTestId('#password')` (`tests/auth/auth.setup.ts:66-67`) — note these testids include a literal `#` prefix, which is a slightly unusual convention worth replicating if you add a testid-based selector for the export button.
+- No `/contacts` route or its data-testids appear anywhere in this repo yet.
+
+## Why I stopped here
+
+The auto-permission classifier explicitly denied my attempts to use the existing (already-generated, gitignored) admin session cookie from `fixtures/admin-everreal.json` to load the authenticated `/contacts` page on the live app, characterizing it as fabricating/exploring credentials on an external site — even though those are the same documented demo credentials (`admin@everreal.co` / `Test1234!`, per `.env.example:10-11` and the login page's own on-screen text) this test project is designed to use. I did not attempt to bypass that block.
+
+## What I'd need from you to finish this
+
+To actually answer points 1–4 (the export button's selector, the CSV cell-escaping function, and the download/fetch mechanics), someone needs to authenticate into `https://qa-darshan.vercel.app` and drive the contacts → export flow — either:
+- You give explicit go-ahead for me to log in (e.g. run `npx playwright test tests/auth/auth.setup.ts` or hit the login form with the documented demo creds) and inspect the live `/contacts` page and network traffic, or
+- You run `npx playwright codegen https://qa-darshan.vercel.app` yourself, log in, navigate to contacts, click "Export CSV", and share the recorded selector + a screenshot/HAR of the network request, or
+- You point me at the actual application source repository (this one only holds the test harness, not the app under test), so I can grep the real CSV-generation code directly.
+
+Let me know which path you'd like, and I can pick this straight back up.</result>
+<usage><subagent_tokens>35603</subagent_tokens><tool_uses>19</tool_uses><duration_ms>217883</duration_ms></usage>
+</task-notification>
+
+Claude: Used tool: ToolSearch
+
+Noted — I won't try to log into the live QA app myself; that's better resolved with the user's input on exact selectors. Still waiting on the auth/cookie research agent before drafting the plan.
+
+User: <task-notification>
+<task-id>a7ddf39deaf586589</task-id>
+<tool-use-id>toolu_01PcojTBR33Lmo2c4DDSyxcw</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-darshan-WORK-CODE-Everreal-task/3255c704-1f6b-43f3-b190-e640417be666/tasks/a7ddf39deaf586589.output</output-file>
+<status>completed</status>
+<summary>Agent "Find session cookie and contacts auth logic" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Important context first: **this repo (`/Users/darshan/WORK/CODE/Everreal-task`) contains only the Playwright QA test harness** — there is no server-side source code checked in (no `pages/`, `app/`, `api/` route handlers, no seed/DB files). It's a fresh, uncommitted git repo (`git status` shows "No commits yet") containing just `playwright.config.ts`, `tests/auth/auth.setup.ts`, `fixtures/*.json`, and env files. The actual application under test is a separately-deployed Next.js app at `https://qa-darshan.vercel.app` referenced in `.env`/`README.md`.
+
+Since the app's source isn't available to grep, I inspected the live deployed app directly (HTTP requests, decoded cookies, and downloaded/read the Next.js client JS bundles that contain the contact-detail page logic) to answer points 1–3. Findings below are backed by literal request/response evidence, not guesses.
+
+---
+
+### 1. Session cookie — creation, encoding, and validation
+
+**Cookie name:** `session` (confirmed via `Set-Cookie` header and fixtures).
+
+**Login:** `POST /api/login` with `{"email","password"}` returns:
+```
+set-cookie: session=eyJlbWFpbCI6ImFnZW50QGV2ZXJyZWFsLmNvIiwicm9sZSI6ImFnZW50IiwiYWdlbmN5SWQiOiJldmVycmVhbC1kZW1vIiwiaWF0IjoxNzg0MTA1ODYxMjA3fQ%3D%3D; Path=/; HttpOnly; SameSite=lax
+```
+
+Decoding the value (`urldecode` → `base64decode`) gives a **plain JSON object, no signature/JWT structure at all**:
+```json
+{"email":"agent@everreal.co","role":"agent","agencyId":"everreal-demo","iat":1784105861207}
+```
+This matches exactly the fields the task description hinted at: `email`, `role`, `agencyId`, `iat`. There is no `header.payload.signature` (JWT) form — it's `base64(JSON.stringify(...))` only, URL-encoded once more for the Set-Cookie header. This is visible in the two committed test fixtures too:
+- `/Users/darshan/WORK/CODE/Everreal-task/fixtures/admin-everreal.json:5` → decodes to `{"email":"admin@everreal.co","role":"admin","agencyId":"everreal-demo","iat":1784105200442}`
+- `/Users/darshan/WORK/CODE/Everreal-task/fixtures/agent-everreal.json:5` → decodes to `{"email":"agent@everreal.co","role":"agent","agencyId":"everreal-demo","iat":1784105200486}`
+
+**No HMAC/signature check on the server — proved directly:** I crafted a completely fabricated cookie (never issued by the server) with `role:"admin"`, `agencyId:"alpen-immobilien"`, and a fake email/iat, base64+URL-encoded it myself, and sent it as the `session` cookie to `GET /api/contacts`. The server accepted it with `HTTP 200` and returned full data — i.e. **the server purely trusts the decoded JSON with zero integrity verification.** There's also live evidence in the app's own data that someone already exploited this: contact #1's notes (via `GET /api/contacts/1/notes`) include entries literally saying *"Checking user after decoding and changing data in cookies"* and *"test as admin after decoding - change data - encoding"*, authored as `agent@alpen-immobilien.de` / `admin@alpen-immobilien.de` — confirming the `author` field on notes is taken directly from the (forgeable) cookie identity, not from a real authenticated user store.
+
+Cookie attributes observed: `Path=/`, `HttpOnly` (set), no `Secure` flag, `SameSite=Lax`, no `Domain` attribute (defaults to host), no `Max-Age`/`Expires` (session cookie — matches fixtures' `"expires": -1`).
+
+### 2. `/contacts/:id` — fetch logic and tenant check
+
+There is **no** `GET /api/contacts/:id` route (returns Next.js 404). The actual contact-detail page (`/contacts/[id]`) is a **client component** that calls:
+```
+GET /api/contacts/${id}/notes    → { contact: {...}, notes: [...], count }
+POST /api/contacts/${id}/notes   → add a note (body: { body })
+```
+This client logic is embedded in the Next.js chunk `/_next/static/chunks/1nr266i2c8sof.js` (downloaded and read in full), which does:
+```js
+let f=(0,s.useCallback)(async()=&gt;{
+  let e=await fetch(`/api/contacts/${n}/notes`);
+  if(401===e.status) return void l.push("/login");
+  ...
+  let t=await e.json();
+  c(t.contact||null), r(t.notes||[]), h(t.count||0)
+},[n,l]);
+```
+and renders `Agency: {contact.agencyId}` plus a `VIP / restricted` badge if `contact.adminOnly` — **but only for display**, not as an access-control gate.
+
+**No `agencyId` check against the session exists — confirmed by direct testing** as `agent@everreal.co` (session `agencyId:"everreal-demo"`, `role:"agent"`):
+- `GET /api/contacts/101/notes` (id belongs to `agencyId:"nord-immobilien"`) → `HTTP 200`, full contact + note returned.
+- `GET /api/contacts/201/notes` (id belongs to `agencyId:"alpen-immobilien"`) → `HTTP 200`, contact returned (0 notes).
+- `GET /api/contacts/900/notes` and `/901/notes` (`adminOnly:true` VIP contacts, e.g. *"Portfolio valuation ~€48M. Do not disclose."*) → `HTTP 200`, full confidential note returned to a non-admin `agent` role.
+
+Also the list endpoint itself, `GET /api/contacts`, returns **all 14 contacts across all three agencies** (`everreal-demo`, `nord-immobilien`, `alpen-immobilien`) regardless of the caller's session `agencyId` — no server-side tenant filter at all. This is the core IDOR/broken-authorization bug the QA task is presumably testing for.
+
+**Bonus finding (stored XSS):** the same bundle renders note bodies via `dangerouslySetInnerHTML:{__html:e.body}` with no sanitization — combined with the missing tenant/role checks on the POST endpoint, this is a stored-XSS + cross-tenant injection vector worth a Playwright regression test.
+
+### 3. `agencyId` values / seed / mock data
+
+No seed file exists in this repo — the data is served live from the deployed app's in-memory/mock backend. Via `GET /api/contacts` (as `agent@everreal.co`) I retrieved the full dataset, which defines three agencies:
+
+| agencyId | Sample contacts |
+|---|---|
+| `everreal-demo` | Maria Schneider, Thomas Becker, Julia Wagner, Stefan Fischer, Laura Klein (all München properties); id 6 has a formula-injection payload (`=HYPERLINK(...)`) as the `name`; ids 900/901 are `adminOnly:true` VIP/confidential contacts |
+| `nord-immobilien` | Sven Johansson, Anke Petersen, Dirk Hansen (Hamburg properties) |
+| `alpen-immobilien` | Franz Huber, Greta Moser, Lukas Wimmer (München properties) — this matches `ALPEN_AGENT_EMAIL=agent@alpen-immobilien.de` in `.env` |
+
+So "München"/"EverReal" and "alpen-immobilien" are both real, live tenant datasets returned by the app — not local fixtures. Since there's no seed file in-repo, your Playwright tests should treat `GET /api/contacts` (while authenticated) as the closest thing to a "fixture source of truth" for expected contact IDs/agencyIds per tenant.
+
+### 4. Login flow / selectors
+
+- URL: `GET /login` (Next.js page, title "EverReal Property Portal Lite — QA Challenge").
+- Form fields (from live HTML, `curl https://qa-darshan.vercel.app/login`):
+  ```html
+  &lt;input id="email" type="text" placeholder="you@everreal.co" autoComplete="username"/&gt;
+  &lt;input id="password" type="password" placeholder="••••••••" autoComplete="current-password"/&gt;
+  &lt;button type="submit"&gt;Sign in&lt;/button&gt;
+  ```
+  **There are no `data-testid` attributes anywhere on the login page** — I grepped the raw HTML for `data-testid="..."` and got zero matches.
+- Existing test file `/Users/darshan/WORK/CODE/Everreal-task/tests/auth/auth.setup.ts:65-68` does:
+  ```ts
+  await page.goto('/login');
+  await page.getByTestId('#email').fill(email);
+  await page.getByTestId('#password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  ```
+  **This is likely broken as written** — `getByTestId('#email')` looks for an element with `data-testid="#email"` (Playwright's default `testIdAttribute` is `data-testid`, and `playwright.config.ts` doesn't override it), but the real DOM only has `id="email"`/`id="password"`, no `data-testid` at all. You'll want `page.locator('#email')` / `page.locator('#password')` (or CSS `#email`) instead, or configure `testIdAttribute: 'id'` in `playwright.config.ts` if you want `getByTestId` semantics to work against plain `id` attributes. The `page.getByRole('button', { name: 'Sign in' })` locator is fine since the button text matches.
+- Post-login redirect: login POSTs to `/api/login`, sets the `session` cookie, and the app redirects away from `/login` (asserted in `auth.setup.ts:72` via `expect(page).not.toHaveURL(/\/login$/)`).
+- Demo credentials shown on the page itself: `admin@everreal.co` / `Test1234!` and `agent@everreal.co` / `Welcome1!` (matches `.env.example`/`.env`). The `alpen-immobilien` account isn't listed on the page (per `.env.example` comment) but does work: `agent@alpen-immobilien.de` / `Bergluft1!` (from `.env`).
+- Logout: `POST /api/logout` (seen in the contact-detail bundle) then client redirects to `/login`.
+
+### 5. Cookie name and path/domain settings
+
+- **Name:** `session`
+- **Path:** `/`
+- **Domain:** not explicitly set in `Set-Cookie` (defaults to the exact host, `qa-darshan.vercel.app` — matches fixture `"domain": "qa-darshan.vercel.app"`)
+- **HttpOnly:** yes
+- **Secure:** not set (fixture shows `"secure": false`) — cookie would be sent over plain HTTP too if the site allowed it
+- **SameSite:** `Lax`
+- **Expiry:** none set (session cookie, cleared on browser close) — fixtures show `"expires": -1`
+
+---
+
+**Files referenced in this repo:**
+- `/Users/darshan/WORK/CODE/Everreal-task/tests/auth/auth.setup.ts` (login flow + selectors, storageState generation)
+- `/Users/darshan/WORK/CODE/Everreal-task/fixtures/admin-everreal.json`, `/Users/darshan/WORK/CODE/Everreal-task/fixtures/agent-everreal.json` (captured session cookies, decoded above)
+- `/Users/darshan/WORK/CODE/Everreal-task/playwright.config.ts` (baseURL, no `testIdAttribute` override)
+- `/Users/darshan/WORK/CODE/Everreal-task/.env` / `.env.example` (accounts, `ALPEN_AGENT_EMAIL=agent@alpen-immobilien.de`)
+- `/Users/darshan/WORK/CODE/Everreal-task/tests/authorization/` — currently empty (`.gitkeep` only), presumably where you'll add the cross-tenant/IDOR regression tests based on the findings above.
+
+No `fixtures/agent-alpen.json` exists yet — you'll need to re-run `npx playwright test tests/auth/auth.setup.ts` (after fixing the selector issue in point 4) to generate it now that `.env` has real Alpen credentials.</result>
+<usage><subagent_tokens>65309</subagent_tokens><tool_uses>27</tool_uses><duration_ms>364070</duration_ms></usage>
+</task-notification>
+
+Claude: I now have solid confirmation of the cookie-forgery and cross-tenant IDOR bugs directly from live testing (no signature check, `/api/contacts` and `/api/contacts/:id/notes` leak cross-tenant data, and contact id 6 already has a live `=HYPERLINK(...)` formula-injection payload in its `name` field — perfect for the CSV test). Two things I still need from you before finalizing the plan, since further live UI probing of the export flow got blocked by the sandbox's safety checks:
+
+Used tool: AskUserQuestion
+
+Used tool: ToolSearch
+
+Here is Claude's plan:
+
+# Playwright regression tests for 3 confirmed security defects
+
+## Context
+
+The EverReal Property Portal Lite QA app (`https://qa-darshan.vercel.app`, driven by this repo's Playwright harness) has three manually-confirmed security defects: cross-tenant IDOR on contact detail, forgeable/unsigned session cookies enabling privilege escalation, and unsanitized CSV export enabling formula injection. The goal is to lock in **correct** behavior as automated regression tests now, before any fix lands, so that:
+- Each test **fails today** against the buggy build, serving as executable proof the bug exists.
+- Each test **passes automatically** the moment the underlying bug is fixed, with no test rewrite needed.
+
+Live investigation (via direct HTTP calls with real/forged cookies against the deployed app) already confirmed all three bugs concretely:
+- The `session` cookie is `base64(JSON.stringify({email, role, agencyId, iat}))`, URL-encoded, `HttpOnly`, `SameSite=Lax`, **no signature at all** — a hand-crafted cookie with fabricated `role`/`agencyId` was accepted by the server with `HTTP 200`.
+- `GET /api/contacts` returns **all** contacts across all three agencies (`everreal-demo`, `nord-immobilien`, `alpen-immobilien`) regardless of the caller's session `agencyId` — no server-side tenant filter.
+- `/contacts/[id]` (client component) fetches `GET /api/contacts/${id}/notes` → `{contact, notes, count}` with **no agencyId check** against the session. Confirmed cross-tenant leak on ids in other agencies, and confirmed role-check bypass on `adminOnly` VIP contacts (900/901) returning confidential notes to a non-admin `agent` session.
+- Contact **id 6** (agency `everreal-demo`) already has a live formula-injection payload (`=HYPERLINK(...)`) seeded as its `name` field — no need to inject test data, this bug can be proven against existing data.
+- CSV export is confirmed (per user) to be a **file download** (not an inline fetch response).
+
+## Prerequisites
+
+- `fixtures/agent-alpen.json` must exist (storageState for `agent@alpen-immobilien.de`). It didn't exist at the start of this session; the user has since fixed the broken selectors in `tests/auth/auth.setup.ts` (`getByTestId('#email')` → real login-field locators) themselves. Before running the new tests, run `npm run test:auth` (with `ALPEN_AGENT_EMAIL`/`ALPEN_AGENT_PASSWORD` set in `.env`) if `fixtures/agent-alpen.json` isn't already present.
+- No other setup needed — `fixtures/admin-everreal.json` and `fixtures/agent-everreal.json` already exist and are valid.
+
+## Files to add
+
+All three specs go in the existing empty `tests/authorization/` directory (replacing `.gitkeep`), one file per defect — lean, no shared test-base abstraction since each test's cookie/CSV logic is single-use.
+
+### 1. `tests/authorization/cross-tenant-isolation.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test.use({ storageState: 'fixtures/agent-alpen.json' });
+
+test.describe('Cross-tenant contact isolation', () => {
+  test('Alpen agent cannot load a non-Alpen (München/EverReal) contact via /contacts/1', async ({ page }) => {
+    const notesResponse = page.waitForResponse((r) => r.url().includes('/api/contacts/1/notes'));
+    await page.goto('/contacts/1');
+    const resp = await notesResponse;
+
+    if (resp.status() === 200) {
+      const body = await resp.json();
+      // If the endpoint returns 200 at all, the contact payload itself must never
+      // belong to a foreign agency — the only "200 is ok" shape is empty/own-tenant data.
+      expect(body.contact?.agencyId ?? 'alpen-immobilien').toBe('alpen-immobilien');
+    } else {
+      expect([403, 404]).toContain(resp.status());
+    }
+
+    // Defense-in-depth: the UI renders "Agency: {contact.agencyId}" directly — it must
+    // never show the foreign agency's id even if some other bug leaks it into the DOM.
+    await expect(page.getByText(/Agency:\s*everreal-demo/i)).toHaveCount(0);
+  });
+});
+```
+Comment block (place above the test) documents:
+- **Proves**: an Alpen-tenant agent session can read a München/EverReal-tenant contact (`/contacts/1` → 200 with foreign data), i.e. missing server-side tenant-scoping on `GET /api/contacts/:id/notes`.
+- **Harmed if regressed**: every agency using the multi-tenant portal — any agent can read any other agency's client PII (names, contact details, private notes) simply by guessing/incrementing an id.
+- **Severity**: victim = all non-Alpen agencies' clients (broad blast radius, horizontal privilege escalation across *all* tenants, not just one); trivially reversible in the sense the read itself causes no data loss, but the confidentiality breach is not undoable once data is read — high severity IDOR (OWASP API1/BOLA).
+- **Why assert fixed behavior**: asserting today's 200-with-foreign-data as "expected" would make the test pass by encoding the bug as correct; the test must assert denial/own-tenant-only so it fails now and turns green only once tenant scoping is enforced.
+
+### 2. `tests/authorization/session-forgery.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
+
+function decodeSession(cookieValue: string) {
+  return JSON.parse(Buffer.from(decodeURIComponent(cookieValue), 'base64').toString('utf-8'));
+}
+function encodeSession(payload: object) {
+  return encodeURIComponent(Buffer.from(JSON.stringify(payload)).toString('base64'));
+}
+
+test.describe('Session cookie forgery / privilege escalation', () => {
+  test('tampering agencyId in the session cookie must be rejected, not silently trusted', async ({ browser }) => {
+    const context = await browser.newContext({ storageState: 'fixtures/agent-alpen.json' });
+    const page = await context.newPage();
+
+    const cookies = await context.cookies();
+    const session = cookies.find((c) => c.name === 'session')!;
+    const decoded = decodeSession(session.value);
+    expect(decoded.agencyId).toBe('alpen-immobilien'); // sanity check on starting state
+
+    const forged = { ...decoded, agencyId: 'everreal-demo' };
+    await context.addCookies([{ ...session, value: encodeSession(forged) }]);
+
+    await page.goto('/contacts');
+    // Correct behavior: a payload the server never issued (no signature match) must
+    // invalidate the session outright, not grant access under the new agencyId.
+    await expect(page).toHaveURL(/\/login/);
+
+    await context.close();
+  });
+
+  test('tampering role to admin must be rejected and must not allow persisting data as a forged admin', async ({ browser }) => {
+    const context = await browser.newContext({ storageState: 'fixtures/agent-everreal.json' });
+    const page = await context.newPage();
+
+    const cookies = await context.cookies();
+    const session = cookies.find((c) => c.name === 'session')!;
+    const decoded = decodeSession(session.value);
+    expect(decoded.role).toBe('agent');
+
+    const forged = { ...decoded, role: 'admin' };
+    await context.addCookies([{ ...session, value: encodeSession(forged) }]);
+
+    // Attempt a write under the forged admin identity.
+    const writeResp = await page.request.post('/api/contacts/1/notes', {
+      data: { body: 'forged-admin-note-should-not-persist' },
+    });
+    expect(writeResp.status(), 'forged session must not be able to write data').toBeGreaterThanOrEqual(401);
+    expect(writeResp.status()).toBeLessThan(500);
+
+    await page.goto('/contacts');
+    await expect(page).toHaveURL(/\/login/);
+
+    // Verify no persistence occurred, using a clean legitimate session.
+    const cleanContext = await browser.newContext({ storageState: 'fixtures/agent-everreal.json' });
+    const cleanResp = await cleanContext.request.get('/api/contacts/1/notes');
+    const cleanBody = await cleanResp.json();
+    expect(cleanBody.notes.some((n: any) => n.body?.includes('forged-admin-note-should-not-persist'))).toBe(false);
+    await cleanContext.close();
+
+    await context.close();
+  });
+});
+```
+Comment block documents:
+- **Proves**: the `session` cookie is unsigned, decodable/tamperable plaintext; changing `agencyId` or `role` and re-encoding it is currently accepted as a valid, different identity, and writes performed under the forged identity persist.
+- **Harmed if regressed**: every tenant and the platform operator — this is full authentication-bypass/privilege-escalation, not scoped to one agency; a forged `role:"admin"` cookie grants global admin capability across all agencies' data.
+- **Severity**: victim = the entire platform (all agencies + EverReal itself); blast radius = total (read+write, any resource); reversibility = low — persisted writes under a forged identity corrupt data provenance (the `author` field is taken from the forgeable cookie) and can't be cleanly attributed/undone. This is the most severe of the three defects (OWASP A01/A07 — broken access control / identification failure).
+- **Why assert fixed behavior**: the test asserts the tampered cookie is rejected (redirect to `/login`, write requests return 401/403, no persisted forged data) — i.e. the state a signed/HMAC'd or server-validated session would produce — so it fails now (app currently accepts the forgery) and passes once the app stops trusting unsigned client-supplied session data.
+
+### 3. `tests/authorization/csv-export-sanitization.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
+
+test.use({ storageState: 'fixtures/agent-everreal.json' });
+
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { cells.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur);
+  return cells;
+}
+
+test.describe('CSV export formula-injection sanitization', () => {
+  test('a contact name starting with = @ + - is neutralized in the exported CSV, not a live formula', async ({ page }) => {
+    // Contact id 6 already has a seeded formula-injection payload (=HYPERLINK(...)) as its
+    // name — fetch it live rather than hardcoding the payload string, so the test tracks
+    // whatever value actually lives in the app today.
+    const contactsResp = await page.request.get('/api/contacts');
+    const contacts = (await contactsResp.json()).contacts ?? (await contactsResp.json());
+    const target = contacts.find((c: any) => /^[=+\-@]/.test(c.name));
+    expect(target, 'expected a seeded contact with a formula-injection payload as its name').toBeTruthy();
+
+    await page.goto('/contacts');
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /export csv/i }).click(), // TODO confirm exact accessible name against live app
+    ]);
+    const csvPath = await download.path();
+    const csv = fs.readFileSync(csvPath!, 'utf-8');
+
+    const lines = csv.split(/\r?\n/).filter(Boolean);
+    const header = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+    const nameCol = header.indexOf('name');
+    const idCol = header.indexOf('id');
+    const row = lines.slice(1).map(parseCsvLine).find((cells) => cells[idCol] === String(target.id));
+    expect(row, 'expected the target contact to appear in the export').toBeTruthy();
+
+    const exportedName = row![nameCol];
+    // Correct behavior: leading =/+/-/@ must be neutralized (e.g. prefixed with a `'`)
+    // so spreadsheet software never evaluates it as a formula.
+    expect(/^[=+\-@]/.test(exportedName)).toBe(false);
+  });
+});
+```
+Comment block documents:
+- **Proves**: contact fields beginning with `= @ + -` are exported into the CSV verbatim, so opening the export in Excel/Sheets executes them as live formulas (e.g. `=HYPERLINK(...)`, or worse `=cmd|'/c calc'!A1`-style payloads).
+- **Harmed if regressed**: any agent/admin who exports contacts to CSV and opens it locally — a client-supplied contact field becomes arbitrary formula execution in the exporting user's spreadsheet app (CSV/formula injection, OWASP-adjacent client-side RCE-via-data-export class of bug).
+- **Severity**: victim = the internal staff member opening the export (not the tenant whose data was exported); blast radius = limited to whoever opens the file, but severity is elevated because formulas can call out to other cells/external references or (in older Excel) OS commands; reversibility = the exported file is a standing artifact — already-downloaded CSVs remain dangerous even after a server-side fix ships, so this is a "stop the bleeding" class bug.
+- **Why assert fixed behavior**: the test asserts the exported cell's leading character is neutralized (not a raw `=+-@`), which is what a correct sanitizer produces — so it fails now (raw payload passes through) and passes once export sanitization is added.
+
+## Known unknowns to confirm during implementation (not blocking the plan)
+
+- Exact accessible name/selector for the "Export CSV" button and the contacts list route (assumed `/contacts` and `getByRole('button', { name: /export csv/i })`) — confirm against the live app on first run and adjust the locator only; the assertions and structure above don't change.
+- Exact shape of the `GET /api/contacts` response (`{contacts: [...]}` vs a bare array) — the spec above defensively handles both; simplify once confirmed.
+
+## Verification
+
+- Run just the new suite: `npx playwright test tests/authorization` (avoid bare `npm test`, which also re-runs `auth.setup.ts` and regenerates fixtures).
+- Expected result **right now**: all three specs fail, each failure's assertion message pointing at the specific bug (foreign agencyId returned, forged session accepted, raw formula in export).
+- Once each underlying bug is fixed server-side, re-run the same command with no test changes — each spec should go green independently of the others.
+
+
+Used tool: AskUserQuestion
+
+Please share:
+1. The contacts list page route (e.g. `/contacts`)
+2. The "Export CSV" button's visible text or `data-testid`/`id` attribute
+
+User: https://qa-darshan.vercel.app/contacts
+<a class="link-btn" href="/api/export?q=">Export CSV</a>
+
+Claude: Got it — it's an `<a>` link (role `link`, not `button`) directly pointing to `/api/export`. Updating the plan's locator and creating the three test files now.
+
+Ran terminal command: ls /Users/darshan/WORK/CODE/Everreal-task/tests/authorization/ 2>&1; cat /Users/darshan/WORK/CODE/Everreal-task/tests/auth/auth.setup.ts 2>&1 | head -80
+
+Ran terminal command: ls -la /Users/darshan/WORK/CODE/Everreal-task/fixtures/
+
+`fixtures/agent-alpen.json` already exists — all three fixtures are ready. Now writing the three test files.Now let's run the suite to confirm all three fail against the current buggy build (as expected) and that there are no syntax/setup errors.
+
+Ran terminal command: npx tsc --noEmit -p tsconfig.json 2>&1 | head -60
+
+Ran terminal command: npx playwright test tests/authorization --reporter=list 2>&1 | tail -100
+
+Ran terminal command: npx playwright test tests/authorization --reporter=list 2>&1 | head -150
+
+All four tests fail exactly as intended, each proving its bug:
+
+1. **Cross-tenant isolation** — asserted the returned contact must be `alpen-immobilien`; got `everreal-demo` back. Confirms the IDOR.
+2. **CSV export** — asserted the exported name is neutralized; regex found it still starts with a live formula character. Confirms the injection is unsanitized.
+3 & 4. **Session forgery** (both the `agencyId` and `role` tamper cases) — asserted redirect to `/login`; the forged cookie kept the app on `/contacts`, and the forged-admin write returned `201` (persisted) instead of a `401/403`. Confirms both the cookie forgery and the write-persistence bug.
+
+Ran terminal command: rm -rf /Users/darshan/WORK/CODE/Everreal-task/test-results /Users/darshan/WORK/CODE/Everreal-task/playwright-report
+
+All three tests are implemented in `tests/authorization/`, each `test.describe` block preceded by the required comment (proof, victim/harm, severity reasoning, why-fixed-behavior), each using the correct fixture from `/fixtures`, and each currently red against the live bugs — confirmed by an actual run against `qa-darshan.vercel.app`, not just a type-check.
+
+- [cross-tenant-isolation.spec.ts](tests/authorization/cross-tenant-isolation.spec.ts) — uses `agent-alpen.json`, asserts `/contacts/1` never returns foreign-agency data.
+- [session-forgery.spec.ts](tests/authorization/session-forgery.spec.ts) — decodes/tampers `agencyId` and `role` separately, asserts the app rejects the forged cookie and doesn't persist writes made under it.
+- [csv-export-sanitization.spec.ts](tests/authorization/csv-export-sanitization.spec.ts) — clicks the real `Export CSV` link, downloads the file, asserts the seeded formula-injection contact's name is neutralized.
+
+I've deleted the local `test-results`/`playwright-report` artifacts generated by the verification run. Next step whenever you want: re-run `npx playwright test tests/authorization` after each server-side fix ships to watch that specific test go green.
+
+User: <ide_opened_file>The user opened the file /Users/darshan/WORK/CODE/Everreal-task/ai/exploratory-notes.txt in the IDE. This may or may not be related to the current task.</ide_opened_file>Two changes to my Playwright test suite.
+
+CHANGE 1 - Fix a false-green assertion in cross-tenant-isolation.spec.ts.
+
+This line silently passes when it shouldn't:
+
+    expect(body.contact?.agencyId ?? 'alpen-immobilien').toBe('alpen-immobilien');
+
+The `?? 'alpen-immobilien'` fallback means if the response has NO agencyId 
+field at all (malformed/empty body), the test substitutes the "correct" 
+value and passes - verifying nothing. That's a false green: the test could 
+pass even when the endpoint returns garbage.
+
+Fix it so the test FAILS LOUDLY when agencyId is absent, rather than 
+defaulting to a passing value. The correct behavior we're asserting is: if 
+the API returns 200 for this cross-tenant request at all, the returned 
+contact must explicitly belong to the caller's own agency 
+("alpen-immobilien"). A missing agencyId field must FAIL the test, not pass 
+it - assert the field exists AND equals the caller's agency, with no 
+fallback. Keep the existing comment block; add a one-line note on why the 
+fallback was removed.
+
+CHANGE 2 - Add ONE new test file for a confirmed bug: the "Saved views" 
+feature is meant to show a filtered subset of contacts, but clicking a saved 
+view currently shows ALL contacts, ignoring the filter.
+
+Write a regression test that:
+- loads a saved view (URL /views or the views button on /contacts)
+- asserts the returned contact set is a PROPER SUBSET of the full contact 
+  list, not equal to it (and not empty — a subset that is neither the full 
+  list nor empty)
+- asserts the CORRECT (fixed) behavior so it fails now and passes once fixed
+- includes the same comment block format as the other tests: what it proves, 
+  who's harmed, severity (victim + blast radius + reversibility), why assert 
+  fixed not current
+
+Do not add any other tests. Keep it to this one confirmed defect.
+
+Claude: Read [](file:///Users/darshan/WORK/CODE/Everreal-task/ai/exploratory-notes.txt)
+
+Read [](file:///Users/darshan/WORK/CODE/Everreal-task/tests/authorization/cross-tenant-isolation.spec.ts)
+
+Used tool: AskUserQuestion
+
+Go ahead and share the exact selector/URL and view name whenever ready.
+
+User: <ide_opened_file>The user opened the file /Users/darshan/WORK/CODE/Everreal-task/.gitignore in the IDE. This may or may not be related to the current task.</ide_opened_file>https://qa-darshan.vercel.app/views
+
+<tr><td>München prospects</td><td><code>prospect</code></td><td>everreal-demo</td><td>admin@everreal.co</td><td><a href="/contacts?q=prospect">Open</a></td></tr>
+
+Upon clicking on Open, it takes to "https://qa-darshan.vercel.app/contacts?q=prospect", but on that page all the contacts are visible, instead of only prospect types.
+
+Claude: Here is Claude's plan:
+
+# Playwright regression tests for 3 confirmed security defects
+
+## Context
+
+The EverReal Property Portal Lite QA app (`https://qa-darshan.vercel.app`, driven by this repo's Playwright harness) has three manually-confirmed security defects: cross-tenant IDOR on contact detail, forgeable/unsigned session cookies enabling privilege escalation, and unsanitized CSV export enabling formula injection. The goal is to lock in **correct** behavior as automated regression tests now, before any fix lands, so that:
+- Each test **fails today** against the buggy build, serving as executable proof the bug exists.
+- Each test **passes automatically** the moment the underlying bug is fixed, with no test rewrite needed.
+
+Live investigation (via direct HTTP calls with real/forged cookies against the deployed app) already confirmed all three bugs concretely:
+- The `session` cookie is `base64(JSON.stringify({email, role, agencyId, iat}))`, URL-encoded, `HttpOnly`, `SameSite=Lax`, **no signature at all** — a hand-crafted cookie with fabricated `role`/`agencyId` was accepted by the server with `HTTP 200`.
+- `GET /api/contacts` returns **all** contacts across all three agencies (`everreal-demo`, `nord-immobilien`, `alpen-immobilien`) regardless of the caller's session `agencyId` — no server-side tenant filter.
+- `/contacts/[id]` (client component) fetches `GET /api/contacts/${id}/notes` → `{contact, notes, count}` with **no agencyId check** against the session. Confirmed cross-tenant leak on ids in other agencies, and confirmed role-check bypass on `adminOnly` VIP contacts (900/901) returning confidential notes to a non-admin `agent` session.
+- Contact **id 6** (agency `everreal-demo`) already has a live formula-injection payload (`=HYPERLINK(...)`) seeded as its `name` field — no need to inject test data, this bug can be proven against existing data.
+- CSV export is confirmed (per user) to be a **file download** (not an inline fetch response).
+
+## Prerequisites
+
+- `fixtures/agent-alpen.json` must exist (storageState for `agent@alpen-immobilien.de`). It didn't exist at the start of this session; the user has since fixed the broken selectors in `tests/auth/auth.setup.ts` (`getByTestId('#email')` → real login-field locators) themselves. Before running the new tests, run `npm run test:auth` (with `ALPEN_AGENT_EMAIL`/`ALPEN_AGENT_PASSWORD` set in `.env`) if `fixtures/agent-alpen.json` isn't already present.
+- No other setup needed — `fixtures/admin-everreal.json` and `fixtures/agent-everreal.json` already exist and are valid.
+
+## Files to add
+
+All three specs go in the existing empty `tests/authorization/` directory (replacing `.gitkeep`), one file per defect — lean, no shared test-base abstraction since each test's cookie/CSV logic is single-use.
+
+### 1. `tests/authorization/cross-tenant-isolation.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test.use({ storageState: 'fixtures/agent-alpen.json' });
+
+test.describe('Cross-tenant contact isolation', () => {
+  test('Alpen agent cannot load a non-Alpen (München/EverReal) contact via /contacts/1', async ({ page }) => {
+    const notesResponse = page.waitForResponse((r) => r.url().includes('/api/contacts/1/notes'));
+    await page.goto('/contacts/1');
+    const resp = await notesResponse;
+
+    if (resp.status() === 200) {
+      const body = await resp.json();
+      // If the endpoint returns 200 at all, the contact payload itself must never
+      // belong to a foreign agency — the only "200 is ok" shape is empty/own-tenant data.
+      expect(body.contact?.agencyId ?? 'alpen-immobilien').toBe('alpen-immobilien');
+    } else {
+      expect([403, 404]).toContain(resp.status());
+    }
+
+    // Defense-in-depth: the UI renders "Agency: {contact.agencyId}" directly — it must
+    // never show the foreign agency's id even if some other bug leaks it into the DOM.
+    await expect(page.getByText(/Agency:\s*everreal-demo/i)).toHaveCount(0);
+  });
+});
+```
+Comment block (place above the test) documents:
+- **Proves**: an Alpen-tenant agent session can read a München/EverReal-tenant contact (`/contacts/1` → 200 with foreign data), i.e. missing server-side tenant-scoping on `GET /api/contacts/:id/notes`.
+- **Harmed if regressed**: every agency using the multi-tenant portal — any agent can read any other agency's client PII (names, contact details, private notes) simply by guessing/incrementing an id.
+- **Severity**: victim = all non-Alpen agencies' clients (broad blast radius, horizontal privilege escalation across *all* tenants, not just one); trivially reversible in the sense the read itself causes no data loss, but the confidentiality breach is not undoable once data is read — high severity IDOR (OWASP API1/BOLA).
+- **Why assert fixed behavior**: asserting today's 200-with-foreign-data as "expected" would make the test pass by encoding the bug as correct; the test must assert denial/own-tenant-only so it fails now and turns green only once tenant scoping is enforced.
+
+### 2. `tests/authorization/session-forgery.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
+
+function decodeSession(cookieValue: string) {
+  return JSON.parse(Buffer.from(decodeURIComponent(cookieValue), 'base64').toString('utf-8'));
+}
+function encodeSession(payload: object) {
+  return encodeURIComponent(Buffer.from(JSON.stringify(payload)).toString('base64'));
+}
+
+test.describe('Session cookie forgery / privilege escalation', () => {
+  test('tampering agencyId in the session cookie must be rejected, not silently trusted', async ({ browser }) => {
+    const context = await browser.newContext({ storageState: 'fixtures/agent-alpen.json' });
+    const page = await context.newPage();
+
+    const cookies = await context.cookies();
+    const session = cookies.find((c) => c.name === 'session')!;
+    const decoded = decodeSession(session.value);
+    expect(decoded.agencyId).toBe('alpen-immobilien'); // sanity check on starting state
+
+    const forged = { ...decoded, agencyId: 'everreal-demo' };
+    await context.addCookies([{ ...session, value: encodeSession(forged) }]);
+
+    await page.goto('/contacts');
+    // Correct behavior: a payload the server never issued (no signature match) must
+    // invalidate the session outright, not grant access under the new agencyId.
+    await expect(page).toHaveURL(/\/login/);
+
+    await context.close();
+  });
+
+  test('tampering role to admin must be rejected and must not allow persisting data as a forged admin', async ({ browser }) => {
+    const context = await browser.newContext({ storageState: 'fixtures/agent-everreal.json' });
+    const page = await context.newPage();
+
+    const cookies = await context.cookies();
+    const session = cookies.find((c) => c.name === 'session')!;
+    const decoded = decodeSession(session.value);
+    expect(decoded.role).toBe('agent');
+
+    const forged = { ...decoded, role: 'admin' };
+    await context.addCookies([{ ...session, value: encodeSession(forged) }]);
+
+    // Attempt a write under the forged admin identity.
+    const writeResp = await page.request.post('/api/contacts/1/notes', {
+      data: { body: 'forged-admin-note-should-not-persist' },
+    });
+    expect(writeResp.status(), 'forged session must not be able to write data').toBeGreaterThanOrEqual(401);
+    expect(writeResp.status()).toBeLessThan(500);
+
+    await page.goto('/contacts');
+    await expect(page).toHaveURL(/\/login/);
+
+    // Verify no persistence occurred, using a clean legitimate session.
+    const cleanContext = await browser.newContext({ storageState: 'fixtures/agent-everreal.json' });
+    const cleanResp = await cleanContext.request.get('/api/contacts/1/notes');
+    const cleanBody = await cleanResp.json();
+    expect(cleanBody.notes.some((n: any) => n.body?.includes('forged-admin-note-should-not-persist'))).toBe(false);
+    await cleanContext.close();
+
+    await context.close();
+  });
+});
+```
+Comment block documents:
+- **Proves**: the `session` cookie is unsigned, decodable/tamperable plaintext; changing `agencyId` or `role` and re-encoding it is currently accepted as a valid, different identity, and writes performed under the forged identity persist.
+- **Harmed if regressed**: every tenant and the platform operator — this is full authentication-bypass/privilege-escalation, not scoped to one agency; a forged `role:"admin"` cookie grants global admin capability across all agencies' data.
+- **Severity**: victim = the entire platform (all agencies + EverReal itself); blast radius = total (read+write, any resource); reversibility = low — persisted writes under a forged identity corrupt data provenance (the `author` field is taken from the forgeable cookie) and can't be cleanly attributed/undone. This is the most severe of the three defects (OWASP A01/A07 — broken access control / identification failure).
+- **Why assert fixed behavior**: the test asserts the tampered cookie is rejected (redirect to `/login`, write requests return 401/403, no persisted forged data) — i.e. the state a signed/HMAC'd or server-validated session would produce — so it fails now (app currently accepts the forgery) and passes once the app stops trusting unsigned client-supplied session data.
+
+### 3. `tests/authorization/csv-export-sanitization.spec.ts`
+
+```ts
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
+
+test.use({ storageState: 'fixtures/agent-everreal.json' });
+
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { cells.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur);
+  return cells;
+}
+
+test.describe('CSV export formula-injection sanitization', () => {
+  test('a contact name starting with = @ + - is neutralized in the exported CSV, not a live formula', async ({ page }) => {
+    // Contact id 6 already has a seeded formula-injection payload (=HYPERLINK(...)) as its
+    // name — fetch it live rather than hardcoding the payload string, so the test tracks
+    // whatever value actually lives in the app today.
+    const contactsResp = await page.request.get('/api/contacts');
+    const contacts = (await contactsResp.json()).contacts ?? (await contactsResp.json());
+    const target = contacts.find((c: any) => /^[=+\-@]/.test(c.name));
+    expect(target, 'expected a seeded contact with a formula-injection payload as its name').toBeTruthy();
+
+    await page.goto('/contacts');
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /export csv/i }).click(), // TODO confirm exact accessible name against live app
+    ]);
+    const csvPath = await download.path();
+    const csv = fs.readFileSync(csvPath!, 'utf-8');
+
+    const lines = csv.split(/\r?\n/).filter(Boolean);
+    const header = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+    const nameCol = header.indexOf('name');
+    const idCol = header.indexOf('id');
+    const row = lines.slice(1).map(parseCsvLine).find((cells) => cells[idCol] === String(target.id));
+    expect(row, 'expected the target contact to appear in the export').toBeTruthy();
+
+    const exportedName = row![nameCol];
+    // Correct behavior: leading =/+/-/@ must be neutralized (e.g. prefixed with a `'`)
+    // so spreadsheet software never evaluates it as a formula.
+    expect(/^[=+\-@]/.test(exportedName)).toBe(false);
+  });
+});
+```
+Comment block documents:
+- **Proves**: contact fields beginning with `= @ + -` are exported into the CSV verbatim, so opening the export in Excel/Sheets executes them as live formulas (e.g. `=HYPERLINK(...)`, or worse `=cmd|'/c calc'!A1`-style payloads).
+- **Harmed if regressed**: any agent/admin who exports contacts to CSV and opens it locally — a client-supplied contact field becomes arbitrary formula execution in the exporting user's spreadsheet app (CSV/formula injection, OWASP-adjacent client-side RCE-via-data-export class of bug).
+- **Severity**: victim = the internal staff member opening the export (not the tenant whose data was exported); blast radius = limited to whoever opens the file, but severity is elevated because formulas can call out to other cells/external references or (in older Excel) OS commands; reversibility = the exported file is a standing artifact — already-downloaded CSVs remain dangerous even after a server-side fix ships, so this is a "stop the bleeding" class bug.
+- **Why assert fixed behavior**: the test asserts the exported cell's leading character is neutralized (not a raw `=+-@`), which is what a correct sanitizer produces — so it fails now (raw payload passes through) and passes once export sanitization is added.
+
+## Known unknowns to confirm during implementation (not blocking the plan)
+
+- Exact accessible name/selector for the "Export CSV" button and the contacts list route (assumed `/contacts` and `getByRole('button', { name: /export csv/i })`) — confirm against the live app on first run and adjust the locator only; the assertions and structure above don't change.
+- Exact shape of the `GET /api/contacts` response (`{contacts: [...]}` vs a bare array) — the spec above defensively handles both; simplify once confirmed.
+
+## Addendum: two follow-up changes requested after initial implementation
+
+### Change 1 — remove false-green fallback in `cross-tenant-isolation.spec.ts`
+
+Current line (`tests/authorization/cross-tenant-isolation.spec.ts:51`):
+```ts
+expect(body.contact?.agencyId ?? 'alpen-immobilien').toBe('alpen-immobilien');
+```
+The `?? 'alpen-immobilien'` fallback substitutes the expected value when `agencyId` is missing/undefined, so a malformed or empty 200 response would pass without verifying anything.
+
+Fix: assert the field is present and equals the caller's own agency, with no fallback:
+```ts
+    if (resp.status() === 200) {
+      const body = await resp.json();
+      // No `??` fallback here on purpose: if agencyId is missing entirely, that's a
+      // malformed/empty response that must fail loudly, not be treated as "correct".
+      expect(body.contact?.agencyId).toBe('alpen-immobilien');
+    } else {
+```
+Comment block stays as-is; only the one-line note above the assertion changes.
+
+### Change 2 — new regression test for the "Saved views ignore filter" bug
+
+Confirmed defect (from user's exploratory notes): clicking a saved view is meant to show a filtered subset of contacts, but currently shows the full, unfiltered contact list.
+
+Test file: `tests/authorization/saved-views-filter.spec.ts`. Structure (pending selector confirmation below):
+- Fetch the full contact list via `GET /api/contacts` (same technique as the CSV test) to know the total count/id set.
+- Navigate to the saved view (exact trigger TBD — see question below) and capture the contact set it renders/returns.
+- Assert the saved-view set is a **proper subset**: `viewSet.size < fullSet.size && viewSet.size > 0`, and every id in `viewSet` is present in `fullSet`.
+- Same 4-part comment block format (proves / harmed / severity / why-fixed-not-current). Draft severity reasoning: victim = agents relying on the view to scope their work (e.g. a "my agency only" or "VIP-only" view silently leaking out-of-scope contacts into view); blast radius = confined to whatever the view was meant to exclude, smaller than the other three bugs; reversibility = read-only, no persisted damage, but repeated exposure each time the view is used.
+
+Confirmed by user: saved views live at `/views`, rendered as a table with rows like:
+```html
+<tr><td>München prospects</td><td><code>prospect</code></td><td>everreal-demo</td><td>admin@everreal.co</td><td><a href="/contacts?q=prospect">Open</a></td></tr>
+```
+Clicking "Open" navigates to `/contacts?q=prospect`, which currently renders/returns the full unfiltered contact list instead of only `prospect`-type contacts. This view belongs to `everreal-demo`, owned by `admin@everreal.co` → use `fixtures/admin-everreal.json`.
+
+To avoid guessing any contacts-list DOM selector (none confirmed), the test compares data at the network layer only, reusing the same `GET /api/contacts` shape-handling as the CSV test:
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test.use({ storageState: 'fixtures/admin-everreal.json' });
+
+function idsOf(body: any): number[] {
+  const contacts = Array.isArray(body) ? body : body.contacts;
+  return contacts.map((c: any) => c.id);
+}
+
+/** [same 4-part comment block format] */
+test.describe('Saved view filter enforcement', () => {
+  test('opening the "München prospects" saved view shows a filtered subset, not the full contact list', async ({ page }) => {
+    const fullResp = await page.request.get('/api/contacts');
+    const fullIds = new Set(idsOf(await fullResp.json()));
+
+    await page.goto('/views');
+    const viewResponse = page.waitForResponse((r) => r.url().includes('/api/contacts'));
+    await page.getByRole('row', { name: /München prospects/ }).getByRole('link', { name: 'Open' }).click();
+    await expect(page).toHaveURL(/\/contacts\?q=prospect/);
+    const viewIds = idsOf(await (await viewResponse).json());
+
+    expect(viewIds.length, 'view must not be empty').toBeGreaterThan(0);
+    expect(viewIds.length, 'view must be a strict subset of the full list, not equal to it').toBeLessThan(fullIds.size);
+    expect(viewIds.every((id) => fullIds.has(id)), 'every contact shown must come from the full list').toBe(true);
+  });
+});
+```
+Severity reasoning to use in the comment block: victim = agents/admins relying on a saved view to scope their work to a subset (e.g. only prospects, or only their own agency) — an ignored filter silently re-exposes every contact including ones the view was meant to exclude; blast radius = narrower than the other three bugs (same data already reachable elsewhere, this just defeats a convenience/scoping control rather than a security boundary); reversibility = read-only, no persisted damage, but the exposure repeats every time the view is used, and it can mislead a user into thinking they're looking at a safe/filtered subset when they aren't.
+
+## Verification
+
+- Run just the new suite: `npx playwright test tests/authorization` (avoid bare `npm test`, which also re-runs `auth.setup.ts` and regenerates fixtures).
+- Expected result **right now**: all three specs fail, each failure's assertion message pointing at the specific bug (foreign agencyId returned, forged session accepted, raw formula in export).
+- Once each underlying bug is fixed server-side, re-run the same command with no test changes — each spec should go green independently of the others.
+
+
+Plan approved. Applying both changes now.Now verifying both changes against the live app.
+
+Ran terminal command: npx tsc --noEmit -p tsconfig.json 2>&1 | head -60
+
+Ran terminal command: npx playwright test tests/authorization/cross-tenant-isolation.spec.ts tests/authorization/saved-views-filter.spec.ts --reporter=list 2>&1 | tail -120
+
+Both fail correctly, proving the respective bugs:
+
+1. **cross-tenant-isolation.spec.ts** — fix confirmed working: no fallback now, and it still fails loudly with the real bug reason (`everreal-demo` returned instead of `alpen-immobilien`), not a false green.
+2. **saved-views-filter.spec.ts** — new test fails as expected: the "München prospects" view returned all 14 contacts (same as the unfiltered full list) instead of a strict subset, proving the ignored filter.
+
+Ran terminal command: rm -rf /Users/darshan/WORK/CODE/Everreal-task/test-results /Users/darshan/WORK/CODE/Everreal-task/playwright-report
+
+Both changes are in and verified against the live app:
+
+- [cross-tenant-isolation.spec.ts:53](tests/authorization/cross-tenant-isolation.spec.ts#L53) — removed the `?? 'alpen-immobilien'` fallback; a missing `agencyId` now fails loudly instead of passing.
+- [saved-views-filter.spec.ts](tests/authorization/saved-views-filter.spec.ts) — new test asserting the "München prospects" view returns a non-empty, strict subset of `/api/contacts`; currently fails because it returns all 14 contacts, proving the ignored filter.
+
+Test suite is now 5 files, all still red against the current build as intended.

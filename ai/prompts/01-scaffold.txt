@@ -18,3 +18,78 @@ Requirements:
 
 Explain the storageState pattern in comments so a reviewer can see the intent.
 Do not write any actual feature tests yet — just the scaffold.
+
+
+
+
+OUTPUT:
+
+This QA project is for a completely different app (real estate, unrelated to the kena-foods codebase currently open). Before scaffolding, I need to know where to put it.
+
+Where should this new Playwright QA project live?
+
+Path: /Users/darshan/WORK/CODE/Everreal-task
+
+And later will create a separate repo for this.
+
+Created project directory
+Good, empty directory. Now scaffolding the project.
+
+
+Ran 2 commands
+Now let me check the Playwright version installed for the config API and set up all the files.
+
+Checked package.json and playwright version
+Let me check the actual login page structure so the auth setup script uses correct selectors.
+
+Page thumbnail
+EverReal Property Portal Lite — QA Challenge
+qa-darshan.vercel.app · Opened in Browser
+
+Used 5 tools
+Not critical, moving on to write the scaffold files.
+
+
+Created 4 files, ran a command
+Now the .gitignore, README skeleton, and fixture/ai placeholders.
+
+
+Created 5 files
+Now let's add npm scripts and verify everything is wired correctly.
+
+
+Read a file, edited a file
+Now let's install the chromium browser and validate the config parses and the auth setup discovers correctly.
+
+
+Ran 4 commands, edited a file
+All three auth setup tests are discovered. Now let's actually run the two known demo accounts to confirm the login flow and storageState capture work end-to-end.
+
+Ran auth setup for the two known demo accounts
+Both passed. Let's confirm the storageState files were written correctly.
+
+Verified storageState fixture files
+Confirmed working — auth cookie captured for both real demo accounts. Now let's confirm the third account fails cleanly with a clear error (since no Alpen credentials exist yet), and verify the .gitignore actually excludes the fixture JSONs.
+
+
+Ran 2 commands
+.env and the fixture JSONs correctly stay untracked. Cleaning up the leftover test-run artifacts now.
+
+Removed generated test-run artifacts
+The scaffold is set up and verified end-to-end at /Users/darshan/WORK/CODE/Everreal-task.
+
+What's there:
+
+playwright.config.ts — baseURL, trace/screenshot/video policy, HTML reporter, retries: 1, fullyParallel, chromium-only project. Added testMatch for *.setup.ts since Playwright's default pattern doesn't pick those up.
+tests/, tests/auth/, tests/authorization/, ai/, fixtures/ — all created.
+tests/auth/auth.setup.ts — logs in as all three accounts and writes storageState to /fixtures. The block comment at the top explains the storageState pattern (what it captures, why it avoids re-login, how future tests would consume it via test.use({ storageState: ... })).
+.env.example / .env — credentials are read from env vars, never hardcoded. .env is gitignored.
+.gitignore — excludes node_modules, fixtures/*.json, .env, and Playwright's own output dirs.
+README.md — headers only for Risk Charter, Exploratory Notes, Bug Reports, Automation, AI Artifact, Go/No-Go.
+Verified, not just written:
+
+Fetched the real /login page and used its actual DOM (#email, #password, "Sign in" button) rather than guessed selectors.
+Ran the setup against the two demo accounts printed on the login page (agent@everreal.co / admin@everreal.co) — both passed and produced valid storageState JSON with session cookies.
+The third account (agent-alpen) has no published credentials, so it fails with a clear "missing credentials" error rather than a silent/confusing one — you'll need to add ALPEN_AGENT_EMAIL/ALPEN_AGENT_PASSWORD to .env once you have that account.
+Confirmed git status shows .env and fixtures/*.json correctly untracked.
+One note: I ran git init locally in that folder just to verify .gitignore behavior (nothing committed, just initialized + staged). You mentioned you'll set up a separate repo later — let me know if you'd rather I remove this local .git so it doesn't get in the way of however you plan to create that repo.

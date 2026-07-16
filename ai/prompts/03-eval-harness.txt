@@ -54,3 +54,43 @@ myself. Just build the container and the field shape
 
 Do not run the harness or fabricate results. Build the scaffold and the logic; 
 I will fill rubric + golden set and run it.
+
+
+
+OUTPUT:
+
+<ide_selection>The user selected the lines 63 to 63 from /Users/darshan/WORK/CODE/Everreal-task/ai/eval/judge.py:
+ANTHROPIC_API_KEY
+
+This may or may not be related to the current task.</ide_selection>getting this error when I have added the key in .env:
+
+python3 -m ai.eval.run
+Traceback (most recent call last):
+File "<frozen runpy>", line 203, in _run_module_as_main
+File "<frozen runpy>", line 88, in _run_code
+File "/Users/darshan/WORK/CODE/Everreal-task/ai/eval/run.py", line 15, in <module>
+main()
+~~~~^^
+File "/Users/darshan/WORK/CODE/Everreal-task/ai/eval/run.py", line 10, in main
+report = run_meta_eval()
+File "/Users/darshan/WORK/CODE/Everreal-task/ai/eval/meta_eval.py", line 55, in run_meta_eval
+result: JudgeResult = judge_candidate(item["name"], item["code"])
+~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/Users/darshan/WORK/CODE/Everreal-task/ai/eval/judge.py", line 98, in judge_candidate
+client = _client()
+File "/Users/darshan/WORK/CODE/Everreal-task/ai/eval/judge.py", line 60, in _client
+raise RuntimeError(
+...<3 lines>...
+)
+RuntimeError: ANTHROPIC_API_KEY is not set. Export it before running the harness, e.g.:
+
+Claude
+Now fixing judge.py to match the question field and to pick up ANTHROPIC_API_KEY from .env (stdlib only, no new dependency):
+
+Confirmed the key exists in .env in plain KEY=value format, which the new loader handles. Compiling to make sure everything's still valid (I won't print or repeat the key value).
+
+Both issues fixed:
+
+Root cause of your error: this repo's .env is loaded by Node's dotenv package (used in playwright.config.ts), but nothing was loading it for Python — os.environ.get(...) only sees vars actually exported in the shell. Added a small stdlib-only loader (_load_dotenv_if_present in judge.py) that reads the repo-root .env if ANTHROPIC_API_KEY isn't already in the environment — no new dependency, still reads from env per the original requirement, still fails loudly if truly absent from both places.
+A second bug that would've crashed the next run: your filled-in rubric.py uses "question" as the key, but judge.py's _build_user_message was still reading c['description'], which would've thrown KeyError the moment the rubric was actually sent to the model. Renamed the Criterion TypedDict field to question and updated judge.py to match — your actual criteria text is untouched.
+Verified with a compile check and a direct call to the new loader (confirmed it populates ANTHROPIC_API_KEY from .env — value not printed). I did not call the Anthropic API or run the full meta-eval; try python3 -m ai.eval.run again now.
